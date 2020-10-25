@@ -863,19 +863,19 @@
 
 (define $bullet-list-start
   (try (pdo (optional $newline)
-            $non-indent-space
+            (notFollowedBy $list-indent)
             (notFollowedBy $hr)
             (oneOf "+*-")
-            (many1 $space-char)
-            (return null))))
+            (ss <- (many1 $space-char))
+            (return (+ 1 (length ss))))))
 
 (define $ordered-list-start
   (try (pdo (optional $newline)
-            $non-indent-space
+            (notFollowedBy $list-indent)
             (many1 $digit)
             (char #\.)
-            (many1 $space-char)
-            (return null))))
+            (ss <- (many1 $space-char))
+            (return (+ 2 (length ss))))))
 
 (define $list-start
   (<?> (<or> $bullet-list-start
@@ -892,16 +892,22 @@
             (return (string-append (list->string xs) "\n")))))
 
 (define $raw-list-item
-  (try (pdo $list-start
-            (xs <- (many1 $list-line))
+  (try (pdo (indented <- $list-start)
+            (x <- $list-line)
             (bs <- (many $blank-line)) ;; "\n"
-            (return (string-join (append xs bs) "")))))
+            (return (cons indented (string-join (cons x bs) ""))))))
+
+(define $list-indent
+  (pdo (i <- (getState 'list-indent))
+       (s <- (if i (string (make-string i #\space))
+                 (string "")))
+       (return s)))
 
 ;; Continuation of a list item, indented and separated by $blank-line
 ;; or (in compact lists) endline.
 ;; Nested lists are parsed as continuations
 (define $list-continuation
-  (try (pdo (lookAhead $indent)
+  (try (pdo (lookAhead $list-indent)
             (xs <- (many1 $list-continuation-line))
             (_s <- (many $blank-line))
             (return (append xs _s)))))
@@ -909,16 +915,17 @@
 (define $list-continuation-line
   (try (pdo (notFollowedBy $blank-line)
             (notFollowedBy $list-start)
-            (optional $indent)
+            $list-indent
             (xs <- (manyTill $anyChar $newline))
             (return (string-append (list->string xs) "\n")))))
 
 (define $list-item ;; -> xexpr?
   (try (pdo (s <- $raw-list-item)
-            (ss <- (many $list-continuation))
-            (return (let ([raw (string-join (cons s (append* ss)) "")])
-                      `(li () ,@(parameterize ([in-list-item? #t])
-                                  (parse-markdown* raw))))))))
+            (ss <- (withState (['list-indent (car s)])
+                              (many $list-continuation)))
+            (return (let ([raw (string-join (cons (cdr s) (append* ss)) "")])
+                      (parameterize ([in-list-item? #t])
+                        `(li () ,@(parse-markdown* raw))))))))
 
 (define $ordered-list
   (try (pdo (lookAhead $ordered-list-start)
